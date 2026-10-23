@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "reports"
 FIGURES = REPORTS / "figures"
 CHOSEN = "GBM + linear market/trend offset (chosen)"
+PER_LOAD = "GBM + linear term, per-load inputs (no same-day averages)"
 
 
 def add_table(doc, frame):
@@ -49,11 +50,15 @@ def figure(doc, path, width, caption):
 def main():
     folds = pd.read_csv(REPORTS / "validation_metrics.csv")
     cities = pd.read_csv(REPORTS / "city_holdout_metrics.csv")
+    extra = pd.read_csv(REPORTS / "extra_checks.csv").groupby("check", sort=False)[["MAPE_%", "MAE"]].mean()
     december = pd.read_csv(ROOT / "data" / "december_chart_inputs.csv")
 
     summary = folds.groupby("model", sort=False)[["MAPE_%", "MAE", "RMSE", "bias_%"]].mean()
     chosen = summary.loc[CHOSEN]
     baseline = summary.loc["GBM: load features only"]
+    per_load = summary.loc[PER_LOAD]
+    kept = extra.loc["trained with suspicious rates kept"]
+    oracle = extra.loc["diagnostic: true daily level (uses test labels)"]
     per_fold = folds.pivot(index="test_window", columns="model", values="MAPE_%").reindex(folds["test_window"].unique())
     wins = int((per_fold.idxmin(axis=1) == CHOSEN).sum())
     city = cities.groupby("segment")[["MAPE_%", "MAE"]].mean()
@@ -65,8 +70,14 @@ def main():
         "GBM: load features only": "GBM, load only",
         "GBM: load + market_index as tree feature": "GBM + market",
         "GBM: load + market + date trend as tree features": "GBM + market + date",
+        PER_LOAD: "GBM + linear, per-load",
         CHOSEN: "GBM + linear term *",
     }[c]).reset_index().rename(columns={"test_window": "Test months"})
+    extra_tbl = pd.DataFrame([
+        ("Final model", chosen["MAPE_%"], chosen["MAE"]),
+        ("Same model, per-load inputs only (no same-day averages)", per_load["MAPE_%"], per_load["MAE"]),
+        ("Final model trained with the suspicious rates kept", kept["MAPE_%"], kept["MAE"]),
+    ], columns=["Variant (same 5 windows, clean test rows)", "MAPE %", "MAE $"])
     city_tbl = city.reset_index().rename(columns={"segment": "Sep-Oct loads", "MAPE_%": "MAPE %", "MAE": "MAE $"})
 
     doc = Document()
@@ -87,7 +98,9 @@ def main():
          f"level and a time trend. On out-of-time validation (train on the past, predict the next two months, "
          f"five times) it averages {chosen['MAPE_%']:.2f}% MAPE / ${chosen['MAE']:.0f} MAE, compared with "
          f"{baseline['MAPE_%']:.2f}% / ${baseline['MAE']:.0f} for the same GBM without the linear term. "
-         f"The final model was retrained on all clean January to October loads before predicting November and December.")
+         f"The final model was retrained on all clean January to October loads before predicting November and December. "
+         f"These windows were also what I used to choose the model, so treat the numbers as selection results, not an "
+         f"untouched test (more on that in section 2).")
 
     # ------------------------------------------------------------------ 2
     doc.add_heading("2. How I split and validated the data", 1)
@@ -101,27 +114,42 @@ def main():
          "I used a rolling-origin (expanding window) split. For each cutoff from 1 May to 1 Sep, the model is trained on "
          "every load before the cutoff and tested on the two calendar months after it. That gives five test windows "
          "(May-Jun through Sep-Oct). They cover months where the market was rising, peaking, falling and flat, so a "
-         "model that only works in one regime shows up. Every model and feature choice below was made on these "
-         "folds. I never looked at validation.csv predictions to tune anything.")
+         "model that only works in one regime shows up.")
+    para(doc,
+         "One caveat on that: every model and feature choice below was made by looking at these same five windows, "
+         "so their average is a model-selection result and probably a little optimistic. I never tuned anything on "
+         "validation.csv, so Spotter's scoring of Nov-Dec is the real untouched test. If I did this again I'd keep "
+         "the Sep-Oct window locked until the very end and only score the final model on it once.")
     para(doc,
          "There was one more thing to test. Eight cities (Allentown, Charlotte, Chicago, Jackson, Knoxville, Laredo, "
          "Norfolk, San Diego) only exist in validation.csv, and about 12% of the validation loads touch one of them. "
          "To check that case I removed 8 random cities completely from training (3 repeats), trained on data before "
          "September, and compared the error on Sep-Oct loads that touch those cities with loads that don't.")
     para(doc,
-         "Metrics: MAPE is the main one because rates go from about $150 to over $8,000, and a $50 miss means very "
-         "different things at each end. I also report MAE, RMSE and mean log bias, since a forecast that is "
-         "systematically high or low is a separate problem from noisy predictions. Mislabelled rows (section 3) are "
-         "excluded from the test folds too, so the numbers measure error against realistic rates.")
+         "Same-day averages. The model uses two inputs built from all loads on the same date: the mean market_index "
+         "and the mean quote_signal for that day. Both are averages of input features, never of rates, and in "
+         "validation they are built the same way (from every load on the test date). That still assumes the whole "
+         "day's batch of loads is available when predictions are made, which is true here because validation.csv "
+         "is handed over as one file. If loads had to be priced one at a time, I'd use the per-load variant (each "
+         "load's own market_index, no daily averages). It scores "
+         f"{per_load['MAPE_%']:.2f}% against {chosen['MAPE_%']:.2f}%, so the results don't depend on this assumption.")
+    para(doc,
+         "Metrics. MAPE = mean of |predicted - actual| / actual over the loads in a window. MAE is the same in "
+         "dollars, and RMSE weights big misses more. Bias = mean of log(predicted / actual) x 100, so negative means "
+         "the model under-predicts. Each number in the tables is a simple average over the five windows. MAPE is the "
+         "main metric because rates go from about $150 to over $8,000, and a $50 miss means very different things "
+         "at each end. The suspicious rows from section 3 are left out of the test windows too, so these numbers "
+         "measure error against realistic rates.")
 
     # ------------------------------------------------------------------ 3
     doc.add_heading("3. Data issues I found and what I did", 1)
     issues = [
-        ("Wrong target values",
+        ("Suspicious target values",
          "677 rows (1.4%) have a rate that is about 0.2-0.4x or 3-5x what the rest of the data says for that "
-         "distance and equipment. There is nothing between 0.5x and 2x outside the main body, so these look like "
-         "unit or data-entry errors, not real market moves. I flag them with an L1-loss GBM (outliers don't pull it "
-         "around) where |log residual| > 0.4, and drop them from training."),
+         "distance and equipment, with nothing in between. That pattern points to entry or unit errors rather than "
+         "real market moves, though I can't confirm it from the data alone. I flag them with an L1-loss GBM (which "
+         "they don't pull around) where |log residual| > 0.4, and drop them from training. Keeping them in "
+         f"raises out-of-time MAPE on clean rows from {chosen['MAPE_%']:.2f}% to {kept['MAPE_%']:.2f}%."),
         ("Negative weight", "292 train / 145 validation rows. The absolute value behaves exactly like a normal weight, so I use abs(weight)."),
         ("Capped weight", "About 1,200 rows sit at exactly 47,500 lb and about 30 at 5,000 lb. These look like clip limits, so I kept them as they are."),
         ("Missing weight", "300 / 165 rows. Left as NaN. HistGradientBoosting learns its own branch for missing values."),
@@ -135,7 +163,7 @@ def main():
     add_table(doc, pd.DataFrame(issues, columns=["Issue", "Handling"]))
     figure(doc, FIGURES / "rate_ratio_hist.png", 5.8,
            "Rate per mile relative to the median for its distance band and equipment. The two small clusters far "
-           "from 0 are the mislabelled rows.")
+           "from 0 are the rows I treat as likely errors.")
 
     # ------------------------------------------------------------------ 4
     doc.add_heading("4. What drives the rate", 1)
@@ -143,10 +171,13 @@ def main():
          "Distance is most of it. Rate per mile falls from about $2.6 under 250 miles to about $1.8 above 2,000 miles. "
          "Flatbed runs about 8% over dry van and reefer about 13%. Weight adds roughly 10% between 5k and 45k lb.")
     para(doc,
-         "The time pattern is the interesting part. The average rate level of a day follows that day's mean "
-         "market_index, and on top of that there is a slow upward drift of a few percent a year. Same-day index plus a "
-         "linear trend explains about 80% of the day-to-day movement in rate level. I tried lagged and smoothed "
-         "versions of the index and they added nothing.")
+         "The time pattern is the interesting part. I took the residuals of a model with no time inputs and "
+         "averaged them per day, giving one 'rate level' number for each of the 304 training days. Regressing that "
+         "daily level on the same-day mean market_index plus a linear time trend gives R-squared of about 0.80. To "
+         "be clear, that is 80% of the variation in daily average levels, not 80% of the variance of individual "
+         "loads. The trend works out to roughly 3-5% a year depending on how it's estimated, but it comes from ten "
+         "months of data, so I treat it as an observed drift rather than established annual growth. Lagged and "
+         "smoothed versions of the index added nothing.")
     figure(doc, FIGURES / "market_vs_rate.png", 6.3,
            "Daily mean market_index (orange) against the daily rate level after removing load effects (teal).")
 
@@ -165,6 +196,10 @@ def main():
          "linear part on the GBM residuals, and repeat three times. Lanes are described by coordinates instead of "
          "city IDs, so the new validation cities borrow from nearby cities instead of falling back to a global average.")
     para(doc,
+         "The last change I made was adding the daily mean quote_signal to the linear part. Average MAPE went from "
+         "2.10% to 2.08%. That is a small gain, about 1% relative, but it improved all five windows, so I kept it. "
+         "The windows overlap, though, so they aren't five independent confirmations.")
+    para(doc,
          "Settings: 1,500 trees, learning rate 0.05, 31 leaves, min 20 rows per leaf, early stopping off so runs "
          "are reproducible. Things I tried that didn't help or made it worse: L1 loss for the main model, bagging "
          "several seeds, a bigger tree size, equipment-specific market slopes, day-of-week terms, and smoothed or "
@@ -180,9 +215,15 @@ def main():
          f"The final model is best in {wins} of 5 windows and has the smallest bias. The one window it doesn't win is "
          "Sep-Oct. There the market sat close to its January level, so ignoring it cost nothing. The biggest errors "
          "for every model are in Jul-Aug, where there is a level drop around 25 July that the market index doesn't "
-         "fully explain, and August loads are noisier in general. To see how much of the error is timing, I "
-         "replaced the predicted daily level with the true one. That only brought MAPE down to about 2.0%, so "
-         "most of what's left is load-level noise rather than the market level.")
+         "fully explain, and August loads are noisier in general.")
+    para(doc, "Extra checks on the same windows:")
+    add_table(doc, extra_tbl)
+    para(doc,
+         "One more diagnostic. To see how much of the remaining error is about getting each day's overall level "
+         "right, I shifted every test day's predictions by that day's true average error. This uses the test "
+         f"labels, so it can't be done at prediction time and isn't a lower bound on the error. It only brought MAPE "
+         f"to {oracle['MAPE_%']:.2f}%, which tells me most of the remaining error is load-to-load variation within "
+         "a day, not the market level.")
     para(doc, "Unseen-city check (8 cities removed from training, 3 repeats):")
     add_table(doc, city_tbl)
     para(doc,

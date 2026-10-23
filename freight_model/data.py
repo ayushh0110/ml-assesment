@@ -72,6 +72,8 @@ def clean(frame: pd.DataFrame, daily: pd.DataFrame, coords: pd.DataFrame) -> pd.
         out["market_index"] = np.nan
     if "quote_signal" not in out:
         out["quote_signal"] = np.nan
+    # Raw row value, used by the per-load variant that can't rely on a same-day batch.
+    out["market_index_raw"] = out["market_index"]
     # Missing market_index -> that day's market level.
     out["market_index"] = out["market_index"].fillna(out["market_daily"])
     out["quote_signal"] = out["quote_signal"].fillna(out["quote_daily"])

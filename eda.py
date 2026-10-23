@@ -71,7 +71,7 @@ def main() -> None:
     ax.hist(np.log2(rpm_ratio), bins=200, color=COLOR)
     ax.set_yscale("log")
     ax.set(xlabel="log2(rate per mile / median for distance band & equipment)", ylabel="loads (log)",
-           title="Two clusters of mislabelled rates (~0.25x and ~4x)")
+           title="Two clusters of suspicious rates (~0.25x and ~4x)")
     fig.tight_layout(); fig.savefig(FIGURES / "rate_ratio_hist.png"); plt.close(fig)
 
     # Figure 3: daily market index vs daily rate level.

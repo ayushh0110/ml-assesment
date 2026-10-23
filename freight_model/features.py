@@ -23,6 +23,8 @@ LOAD_FEATURES = [
 # Market/time features for the linear part: trees cannot extrapolate a trend, and the
 # market level drifts outside the combinations seen in training.
 TEMPORAL_FEATURES = ["market_daily", "quote_daily", "trend_years"]
+# Same idea without any same-day aggregates: each load priced on its own market_index.
+PER_LOAD_TEMPORAL_FEATURES = ["market_row", "trend_years"]
 
 
 def haversine_miles(lat1, lon1, lat2, lon2):
@@ -39,5 +41,6 @@ def build_features(frame: pd.DataFrame) -> pd.DataFrame:
     X["equipment_code"] = frame["equipment"].map(EQUIPMENT_CODES)
     X["market_daily"] = frame["market_daily"]
     X["quote_daily"] = frame["quote_daily"]
+    X["market_row"] = frame["market_index_raw"]
     X["trend_years"] = (frame["date"] - TREND_ORIGIN).dt.days / 365.0
     return X

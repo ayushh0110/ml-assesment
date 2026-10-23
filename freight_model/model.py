@@ -40,22 +40,28 @@ def robust_log_baseline(X: pd.DataFrame, log_y: pd.Series) -> np.ndarray:
 
 
 class FreightRateModel:
-    def __init__(self, backfit_iterations: int = 3, **gbm_overrides):
+    def __init__(self, temporal_features: list[str] | None = None, backfit_iterations: int = 3, **gbm_overrides):
+        self.temporal_features = list(temporal_features or TEMPORAL_FEATURES)
         self.backfit_iterations = backfit_iterations
         self.gbm_overrides = gbm_overrides
 
+    def _temporal(self, X: pd.DataFrame) -> pd.DataFrame:
+        return X[self.temporal_features].fillna(self.fill_)
+
     def fit(self, X: pd.DataFrame, rate: pd.Series) -> "FreightRateModel":
+        # training medians cover any gaps in the linear inputs (only market_row has them)
+        self.fill_ = X[self.temporal_features].median()
         log_y = np.log(rate.to_numpy())
         offset = np.zeros(len(X))
         for _ in range(self.backfit_iterations):
             self.gbm_ = _gbm(**self.gbm_overrides).fit(X[LOAD_FEATURES], log_y - offset)
             resid = log_y - self.gbm_.predict(X[LOAD_FEATURES])
-            self.linear_ = LinearRegression().fit(X[TEMPORAL_FEATURES], resid)
-            offset = self.linear_.predict(X[TEMPORAL_FEATURES])
+            self.linear_ = LinearRegression().fit(self._temporal(X), resid)
+            offset = self.linear_.predict(self._temporal(X))
         return self
 
     def predict_log(self, X: pd.DataFrame) -> np.ndarray:
-        return self.gbm_.predict(X[LOAD_FEATURES]) + self.linear_.predict(X[TEMPORAL_FEATURES])
+        return self.gbm_.predict(X[LOAD_FEATURES]) + self.linear_.predict(self._temporal(X))
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return np.exp(self.predict_log(X))

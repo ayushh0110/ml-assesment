@@ -2,4 +2,5 @@ model,MAPE_%,MAE,RMSE,bias_%
 GBM: load features only,2.622,61.035,96.398,-1.036
 GBM: load + market_index as tree feature,3.042,69.758,101.129,-2.293
 GBM: load + market + date trend as tree features,3.359,80.578,121.929,-1.392
+"GBM + linear term, per-load inputs (no same-day averages)",2.095,48.573,77.75,-0.309
 GBM + linear market/trend offset (chosen),2.084,47.975,75.662,-0.259
