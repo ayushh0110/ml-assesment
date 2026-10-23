@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+models/
+
+# original downloads (copies live in data/ under the names the README expects)
+/train-test.csv
+/validation.csv
+/validation-predictions-template.csv
+/december-chart-inputs.csv
+/freight-rate-ml-assessment-1-.pdf
